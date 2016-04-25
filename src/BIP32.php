@@ -3,7 +3,6 @@
 namespace BitWasp\BitcoinLib;
 
 use Mdanter\Ecc\EccFactory;
-use Mdanter\Ecc\Point;
 
 /**
  * BIP32
@@ -138,6 +137,7 @@ class BIP32
      *
      * @param    string $master
      * @param    array  $address_definition
+     * @param    array  $generated (internal, should never be set in your code)
      * @return    array
      */
     public static function CKD($master, $address_definition, $generated = array())
@@ -197,8 +197,8 @@ class BIP32
 
         array_push($generated, (self::get_address_number($i, $is_prime) . (($is_prime == 1) ? "'" : null)));
 
-        $math = \Mdanter\Ecc\EccFactory::getAdapter();
-        $g = \Mdanter\Ecc\EccFactory::getSecgCurves($math)->generator256k1();
+        $math = EccFactory::getAdapter();
+        $g = EccFactory::getSecgCurves($math)->generator256k1();
         $n = $g->getOrder();
         $Il_dec = $math->hexDec($I_l);
 
@@ -260,7 +260,6 @@ class BIP32
 
         // Start building the address bytes tuple.
         foreach ($address_definition as &$def) {
-
             // Check if we want the prime derivation
             $want_prime = 0;
             if (strpos($def, "'") !== false) {
@@ -548,8 +547,8 @@ class BIP32
      * This function accepts a bip32 extended key, and converts it to a
      * bitcoin address.
      *
-     * @param    string $extended_key
-     * return    string|FALSE
+     * @param string $extended_key
+     * @return string
      */
     public static function key_to_address($extended_key, $address_version=null)
     {
@@ -695,7 +694,7 @@ class BIP32
      */
     public static function check_is_prime_hex($hex)
     {
-        $math = \Mdanter\Ecc\EccFactory::getAdapter();
+        $math = EccFactory::getAdapter();
         $cmp = $math->cmp($math->hexDec($hex), $math->hexDec('80000000'));
         $is_prime = ($cmp == -1) ? 0 : 1;
         return $is_prime;
@@ -715,8 +714,8 @@ class BIP32
      */
     public static function check_valid_hmac_key($key)
     {
-        $math = \Mdanter\Ecc\EccFactory::getAdapter();
-        $g = \Mdanter\Ecc\EccFactory::getSecgCurves($math)->generator256k1();
+        $math = EccFactory::getAdapter();
+        $g = EccFactory::getSecgCurves($math)->generator256k1();
         $n = $g->getOrder();
 
         // initialize the key as a base 16 number.
@@ -735,19 +734,18 @@ class BIP32
         return true;
     }
 
-
     /**
      * Get Address Number
      *
      * Convert the 32 bit integer into a decimal numbe, and perform an &
      * to unset the byte.
-     *
-     * @param    string $hex
-     * @param           int
+     * @param $hex
+     * @param int $is_prime
+     * @return int
      */
     public static function get_address_number($hex, $is_prime = 0)
     {
-        $math = \Mdanter\Ecc\EccFactory::getAdapter();
+        $math = EccFactory::getAdapter();
         $dec = $math->hexDec($hex);
 
         if ($is_prime == 1) {

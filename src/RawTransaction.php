@@ -3,11 +3,9 @@
 namespace BitWasp\BitcoinLib;
 
 use Mdanter\Ecc\EccFactory;
-use Mdanter\Ecc\Point;
-use Mdanter\Ecc\PrivateKey;
-use Mdanter\Ecc\PublicKey;
-use Mdanter\Ecc\Signature\Signature;
-use Mdanter\Ecc\Signature\Signer;
+use Mdanter\Ecc\Crypto\Key\PublicKey;
+use Mdanter\Ecc\Crypto\Signature\Signature;
+use Mdanter\Ecc\Crypto\Signature\Signer;
 
 /**
  * Raw Transaction Library
@@ -27,17 +25,33 @@ use Mdanter\Ecc\Signature\Signer;
  */
 class RawTransaction
 {
+    /**
+     * used in _check_sig to determine if we want to fail on high S values
+     *
+     * @var bool
+     */
+    const ALLOW_HIGH_S = true;
 
     /**
      * Some of the defined OP CODES available in Bitcoins script.
      *
      */
     public static $op_code = array(
-        '00' => 'OP_FALSE', '61' => 'OP_NOP', '6a' => 'OP_RETURN',
-        '76' => 'OP_DUP', '87' => 'OP_EQUAL', '88' => 'OP_EQUALVERIFY',
-        '51' => 'OP_TRUE', 'a6' => 'OP_RIPEMD160', 'a7' => 'OP_SHA1',
-        'a8' => 'OP_SHA256', 'a9' => 'OP_HASH160', 'aa' => 'OP_HASH256',
-        'ac' => 'OP_CHECKSIG', 'ae' => 'OP_CHECKMULTISIG');
+        '00' => 'OP_0', // or OP_FALSE
+        '51' => 'OP_1', // or OP_TRUE
+        '61' => 'OP_NOP',
+        '6a' => 'OP_RETURN',
+        '76' => 'OP_DUP',
+        '87' => 'OP_EQUAL',
+        '88' => 'OP_EQUALVERIFY',
+        'a6' => 'OP_RIPEMD160',
+        'a7' => 'OP_SHA1',
+        'a8' => 'OP_SHA256',
+        'a9' => 'OP_HASH160',
+        'aa' => 'OP_HASH256',
+        'ac' => 'OP_CHECKSIG',
+        'ae' => 'OP_CHECKMULTISIG'
+    );
 
     /**
      * Flip Byte Order
@@ -156,13 +170,13 @@ class RawTransaction
         if ($decimal < 253) {
             $hint = self::_dec_to_bytes($decimal, 1);
             $num_bytes = 0;
-        } else if ($decimal < 65535) {
+        } elseif ($decimal < 65535) {
             $hint = 'fd';
             $num_bytes = 2;
-        } else if ($hex < 4294967295) {
+        } elseif ($hex < 4294967295) {
             $hint = 'fe';
             $num_bytes = 4;
-        } else if ($hex < 18446744073709551615) {
+        } elseif ($hex < 18446744073709551615) {
             $hint = 'ff';
             $num_bytes = 8;
         } else {
@@ -183,13 +197,13 @@ class RawTransaction
         if ($length < 75) {
             $l = self::_dec_to_bytes($length, 1);
             $string = $l . $script;
-        } else if ($length <= 0xff) {
+        } elseif ($length <= 0xff) {
             $l = self::_dec_to_bytes($length, 1);
             $string = '4c' . $l . $script;
-        } else if ($length <= 0xffff) {
+        } elseif ($length <= 0xffff) {
             $l = self::_dec_to_bytes($length, 2, true);
             $string = '4d' . $l . $script;
-        } else if ($length <= 0xffffffff) {
+        } elseif ($length <= 0xffffffff) {
             $l = self::_dec_to_bytes($length, 4, true);
             $string = '4e' . $l . $script;
         } else {
@@ -220,18 +234,18 @@ class RawTransaction
             if ($code < 1) {
                 // OP_FALSE
                 $push = '0';
-            } else if ($code <= 75) {
+            } elseif ($code <= 75) {
                 // $code bytes will be pushed to the stack.
                 $push = substr($script, $pos, ($code * 2));
                 $pos += $code * 2;
-            } else if ($code <= 78) {
+            } elseif ($code <= 78) {
                 // In this range, 2^($code-76) is the number of bytes to take for the *next* number onto the stack.
-                $szsz = 2 ^ ($code - 76); // decimal number of bytes.
+                $szsz = pow(2, $code - 75); // decimal number of bytes.
                 $sz = hexdec(substr($script, $pos, ($szsz * 2))); // decimal number of bytes to load and push.
                 $pos += $szsz;
                 $push = substr($script, $pos, ($pos + $sz * 2)); // Load the data starting from the new position.
                 $pos += $sz * 2;
-            } else if ($code <= 96) {
+            } elseif ($code <= 96) {
                 // OP_x, where x = $code-80
                 $push = ($code - 80);
             } else {
@@ -303,7 +317,6 @@ class RawTransaction
     {
         $inputs = '';
         for ($i = 0; $i < $input_count; $i++) {
-
             if (isset($vin[$i]['coinbase'])) {
                 // Coinbase
                 $txHash = '0000000000000000000000000000000000000000000000000000000000000000';
@@ -335,26 +348,35 @@ class RawTransaction
      * This function takes $script (hex) as an argument, and decodes an
      * script hex into an assembled human readable string.
      *
-     * @param    string $script
+     * @param     string $script
+     * @param     bool $matchBitcoinCore
      * @return    string
      */
-    public static function _decode_scriptPubKey($script)
+    public static function _decode_scriptPubKey($script, $matchBitcoinCore = false)
     {
         $data = array();
         while (strlen($script) !== 0) {
-            $byte = self::_return_bytes($script, 1);
+            $byteHex = self::_return_bytes($script, 1);
+            $byteInt = hexdec($byteHex);
 
-            if (isset(self::$op_code[$byte])) {
+            if (isset(self::$op_code[$byteHex])) {
                 // This checks if the OPCODE is defined from the list of constants.
-                $data[] = self::$op_code[$byte];
 
-            } else if (hexdec($byte) >= 0x01 && hexdec($byte) <= 0x4b) {
+                if ($matchBitcoinCore && self::$op_code[$byteHex] == "OP_0") {
+                    $data[] = '0';
+                } else if ($matchBitcoinCore && self::$op_code[$byteHex] == "OP_1") {
+                    $data[] = '1';
+                } else {
+                    $data[] = self::$op_code[$byteHex];
+                }
+
+            } elseif ($byteInt >= 0x01 && $byteInt <= 0x4b) {
                 // This checks if the OPCODE falls in the PUSHDATA range
-                $data[] = self::_return_bytes($script, hexdec($byte));
+                $data[] = self::_return_bytes($script, $byteInt);
 
-            } else if (hexdec($byte) >= 0x52 && hexdec($byte) <= 0x60) {
+            } elseif ($byteInt >= 0x51 && $byteInt <= 0x60) {
                 // This checks if the CODE falls in the OP_X range
-                $data[] = 'OP_' . ($byte - 0x52);
+                $data[] = $matchBitcoinCore ? ($byteInt - 0x50) : 'OP_' . ($byteInt - 0x50);
             } else {
                 throw new \RuntimeException("Failed to decode scriptPubKey");
             }
@@ -467,7 +489,7 @@ class RawTransaction
      */
     public static function _decode_outputs(&$tx, $output_count, $magic_byte = null, $magic_p2sh_byte = null)
     {
-        $math = \Mdanter\Ecc\EccFactory::getAdapter();
+        $math = EccFactory::getAdapter();
 
         $magic_byte = BitcoinLib::magicByte($magic_byte);
         $magic_p2sh_byte = BitcoinLib::magicP2SHByte($magic_p2sh_byte);
@@ -476,7 +498,7 @@ class RawTransaction
         for ($i = 0; $i < $output_count; $i++) {
             // Pop 8 bytes (flipped) from the $tx string, convert to decimal,
             // and then convert to Satoshis.
-            $satoshis = $math->hexDec(self::_return_bytes($tx, 8, true), 16, 10);
+            $satoshis = $math->hexDec(self::_return_bytes($tx, 8, true));
 
             // Decode the varint for the length of the scriptPubKey
             $script_length = self::_get_vint($tx); // decimal number of bytes
@@ -559,7 +581,7 @@ class RawTransaction
      */
     public static function decode($raw_transaction, $magic_byte = null, $magic_p2sh_byte = null)
     {
-        $math = \Mdanter\Ecc\EccFactory::getAdapter();
+        $math = EccFactory::getAdapter();
 
         $magic_byte = BitcoinLib::magicByte($magic_byte);
         $magic_p2sh_byte = BitcoinLib::magicP2SHByte($magic_p2sh_byte);
@@ -576,8 +598,8 @@ class RawTransaction
 
         $info = array();
         $info['txid'] = $txid;
-        $info['version'] = $math->hexDec(self::_return_bytes($raw_transaction, 4, true), 16);
-        if (!in_array($info['version'], array('1'))) {
+        $info['version'] = $math->hexDec(self::_return_bytes($raw_transaction, 4, true));
+        if (!in_array($info['version'], array('0', '1'))) {
             throw new \InvalidArgumentException("Invalid transaction version");
         }
 
@@ -724,17 +746,25 @@ class RawTransaction
      * @param    string $sig
      * @param    string $hash
      * @param    string $key
-     * @return    boolean
+     * @param    bool   $allowHighS
+     * @return bool
      */
-    public static function _check_sig($sig, $hash, $key)
+    public static function _check_sig($sig, $hash, $key, $allowHighS = self::ALLOW_HIGH_S)
     {
-        $math = \Mdanter\Ecc\EccFactory::getAdapter();
-        $generator = \Mdanter\Ecc\EccFactory::getSecgCurves()->generator256k1();
+        $math = EccFactory::getAdapter();
+        $generator = EccFactory::getSecgCurves()->generator256k1();
         $curve = $generator->getCurve();
 
         $hash = $math->hexDec($hash);
-        $signature = self::decode_signature($sig);
-        $test_signature = new Signature($math->hexDec($signature['r']), $math->hexDec($signature['s']));
+        $decodedSignature = self::decode_signature($sig);
+        $signature = new Signature($math->hexDec($decodedSignature['r']), $math->hexDec($decodedSignature['s']));
+
+        if (!$allowHighS) {
+            // if S is > half then someone should have fixed it
+            if (self::check_signature_is_high_s($signature)) {
+                return false;
+            }
+        }
 
         if (strlen($key) == '66') {
             $decompress = BitcoinLib::decompress_public_key($key);
@@ -749,7 +779,20 @@ class RawTransaction
         $signer = new Signer($math);
         $public_key = new PublicKey($math, $generator, $public_key_point);
 
-        return $signer->verify($public_key, $test_signature, $hash) == true;
+        return $signer->verify($public_key, $signature, $hash) == true;
+    }
+
+    public static function check_signature_is_high_s(Signature $signature)
+    {
+        $math = EccFactory::getAdapter();
+        $generator = EccFactory::getSecgCurves()->generator256k1();
+
+        $n = $generator->getOrder();
+        $against = $n;
+        $against = $math->rightShift($against, 1);
+
+        // if S is > half then someone should have substracted N
+        return $math->cmp($signature->getS(), $against) > 0;
     }
 
     /**
@@ -765,7 +808,7 @@ class RawTransaction
      */
     public static function decode_redeem_script($redeem_script, $data = array())
     {
-        $math = \Mdanter\Ecc\EccFactory::getAdapter();
+        $math = EccFactory::getAdapter();
 
         // If there is no more work to be done (script is fully parsed, return the array)
         if (strlen($redeem_script) == 0) {
@@ -783,14 +826,14 @@ class RawTransaction
             $data['keys'] = array();
             $redeem_script = substr($redeem_script, 2);
 
-        } else if (count($data['keys']) == 0 && !isset($data['next_key_charlen'])) {
+        } elseif (count($data['keys']) == 0 && !isset($data['next_key_charlen'])) {
             // Next is to find out the length of the following public key.
             $hex = substr($redeem_script, 0, 2);
             // Set up the length of the following key.
             $data['next_key_charlen'] = $math->mul(2, $math->hexDec($hex));
 
             $redeem_script = substr($redeem_script, 2);
-        } else if (isset($data['next_key_charlen'])) {
+        } elseif (isset($data['next_key_charlen'])) {
             // Extract the key, and work out the next step for the code.
             $data['keys'][] = substr($redeem_script, 0, $data['next_key_charlen']);
             $next_op = substr($redeem_script, $data['next_key_charlen'], 2);
@@ -806,10 +849,9 @@ class RawTransaction
                 $data['next_key_charlen'] = $math->mul(2, $math->hexDec($next_op));
 
                 // If 52 <= $next_op >= 60 : End of keys, now have n.
-            } else if (in_array($math->cmp($math->hexDec($next_op), $math->hexDec('51')), array(0, 1))
+            } elseif (in_array($math->cmp($math->hexDec($next_op), $math->hexDec('51')), array(0, 1))
                 && in_array($math->cmp($math->hexDec($next_op), $math->hexDec('60')), array(-1, 0))
             ) {
-
                 // Finish the script - obtain n
                 $data['n'] = $math->sub($math->hexDec($next_op), $math->hexDec('50'));
                 if ($redeem_script !== 'ae') {
@@ -840,7 +882,7 @@ class RawTransaction
      */
     public static function create_redeem_script($m, $public_keys = array())
     {
-        $math = \Mdanter\Ecc\EccFactory::getAdapter();
+        $math = EccFactory::getAdapter();
 
         if (count($public_keys) == 0) {
             throw new \InvalidArgumentException("No public keys provided");
@@ -920,9 +962,10 @@ class RawTransaction
      * @param    string $json_string
      * @param    string $magic_byte
      * @param    string $magic_p2sh_byte
-     * @return    boolean
+     * @param    bool   $allowHighS
+     * @return bool
      */
-    public static function validate_signed_transaction($raw_tx, $json_string, $magic_byte = null, $magic_p2sh_byte = null)
+    public static function validate_signed_transaction($raw_tx, $json_string, $magic_byte = null, $magic_p2sh_byte = null, $allowHighS = self::ALLOW_HIGH_S)
     {
         $magic_byte = BitcoinLib::magicByte($magic_byte);
         $magic_p2sh_byte = BitcoinLib::magicP2SHByte($magic_p2sh_byte);
@@ -943,10 +986,10 @@ class RawTransaction
                 $signature = $scripts[0];
 
                 $public_key = $scripts[1];
-                $o = self::_check_sig($signature, $message_hash[$i], $public_key);
+                $o = self::_check_sig($signature, $message_hash[$i], $public_key, $allowHighS);
                 $outcome = $outcome && $o;
 
-            } else if ($type_info['type'] == 'scripthash') {
+            } elseif ($type_info['type'] == 'scripthash') {
                 // Pay-to-script-hash. Check OP_FALSE <sig> ... <redeemScript>
                 $redeem_script_found = false;
                 $pubkey_found = false;
@@ -969,7 +1012,7 @@ class RawTransaction
                 foreach ($scripts as $signature) {
                     // Test each signature with the public keys in the redeemScript.
                     foreach ($redeemScript['keys'] as $public_key) {
-                        if (self::_check_sig($signature, $message_hash[$i], $public_key) == true) {
+                        if (self::_check_sig($signature, $message_hash[$i], $public_key, $allowHighS) == true) {
                             $pubkey_found = true;
                             break 2;
                         }
@@ -992,7 +1035,9 @@ class RawTransaction
      * Outputs: Each output is a key in the array: address => $value.
      *
      * @param   array  $inputs
-     * @param   array  $outputs
+     * @param   array  $outputs [address => value, ] or [[address, value], ]
+     *                          or [['address' => address, 'value' => value], ]
+     *                          or [['scriptPubKey' => scriptPubKey, 'value' => value], ]
      * @param   string $magic_byte
      * @param   string $magic_p2sh_byte
      * @return  string|FALSE
@@ -1013,39 +1058,73 @@ class RawTransaction
                 throw new \InvalidArgumentException("Invalid input [{$i}]");
             }
 
-            $tx_array['vin'][] = array('txid' => $input['txid'],
+            $tx_array['vin'][] = [
+                'txid' => $input['txid'],
                 'vout' => $input['vout'],
                 'sequence' => (isset($input['sequence'])) ? $input['sequence'] : 4294967295,
-                'scriptSig' => array('hex' => '')
-            );
+                'scriptSig' => ['hex' => '']
+            ];
         }
 
         // Outputs is the set of [address/amount]
         $tx_array['vout'] = array();
-        foreach ($outputs as $address => $value) {
-            if (!BitcoinLib::validate_address($address, $magic_byte, $magic_p2sh_byte)) {
-                throw new \InvalidArgumentException("Invalid address [{$address}]");
+        foreach ($outputs as $k => $v) {
+            $address = null;
+            $scriptPubKey = null;
+
+            if (is_numeric($k)) {
+                if (!is_array($v)) {
+                    throw new \InvalidArgumentException(
+                        "outputs should be [address => value, ] or [[address, value], ]" .
+                        "or [['address' => address, 'value' => value], ] or [['scriptPubKey' => scriptPubKey, 'value' => value], ]"
+                    );
+                }
+
+                if (isset($v['scriptPubKey']) && isset($v['value'])) {
+                    $scriptPubKey = $v['scriptPubKey'];
+                    $value = $v['value'];
+                } else if (isset($v['address']) && isset($v['value'])) {
+                    $address = $v['address'];
+                    $value = $v['value'];
+                } else if (count($v) == 2 && isset($v[0]) && isset($v[1])) {
+                    $address = $v[0];
+                    $value = $v[1];
+                } else {
+                    throw new \InvalidArgumentException(
+                        "outputs should be [address => value, ] or [[address, value], ]" .
+                        "or [['address' => address, 'value' => value], ] or [['scriptPubKey' => scriptPubKey, 'value' => value], ]"
+                    );
+                }
+            } else {
+                $address = $k;
+                $value = $v;
             }
 
             if (!is_int($value)) {
                 throw new \InvalidArgumentException("Values should be in Satoshis [{$value}]");
             }
+            if (!$scriptPubKey) {
+                if (!BitcoinLib::validate_address($address, $magic_byte, $magic_p2sh_byte)) {
+                    throw new \InvalidArgumentException("Invalid address [{$address}]");
+                }
 
-            $decode_address = BitcoinLib::base58_decode($address);
-            $version = substr($decode_address, 0, 2);
-            $hash = substr($decode_address, 2, 40);
+                $decode_address = BitcoinLib::base58_decode($address);
+                $version = substr($decode_address, 0, 2);
+                $hash = substr($decode_address, 2, 40);
 
-            if ($version == $magic_p2sh_byte) {
-                // OP_HASH160 <scriptHash> OP_EQUAL
-                $scriptPubKey = "a914{$hash}87";
-            } else {
-                // OP_DUP OP_HASH160 <pubKeyHash> OP_EQUALVERIFY OP_CHECKSIG
-                $scriptPubKey = "76a914{$hash}88ac";
+                if ($version == $magic_p2sh_byte) {
+                    // OP_HASH160 <scriptHash> OP_EQUAL
+                    $scriptPubKey = "a914{$hash}87";
+                } else {
+                    // OP_DUP OP_HASH160 <pubKeyHash> OP_EQUALVERIFY OP_CHECKSIG
+                    $scriptPubKey = "76a914{$hash}88ac";
+                }
             }
 
-            $tx_array['vout'][] = array('value' => $value,
-                'scriptPubKey' => array('hex' => $scriptPubKey)
-            );
+            $tx_array['vout'][] = [
+                'value' => $value,
+                'scriptPubKey' => ['hex' => $scriptPubKey]
+            ];
         }
 
         $tx_array['locktime'] = 0;
@@ -1074,8 +1153,8 @@ class RawTransaction
      */
     public static function sign($wallet, $raw_transaction, $inputs, $magic_byte = null, $magic_p2sh_byte = null)
     {
-        $math = \Mdanter\Ecc\EccFactory::getAdapter();
-        $generator = \Mdanter\Ecc\EccFactory::getSecgCurves($math)->generator256k1();
+        $math = EccFactory::getAdapter();
+        $generator = EccFactory::getSecgCurves($math)->generator256k1();
 
         $magic_byte = BitcoinLib::magicByte($magic_byte);
         $magic_p2sh_byte = BitcoinLib::magicP2SHByte($magic_p2sh_byte);
@@ -1091,12 +1170,10 @@ class RawTransaction
         $req_sigs = 0;
         $sign_count = 0;
         foreach ($decode['vin'] as $vin => $input) {
-
             $scriptPubKey = self::_decode_scriptPubKey($inputs_arr[$vin]->scriptPubKey);
             $tx_info = self::_get_transaction_type($scriptPubKey, $magic_byte, $magic_p2sh_byte);
 
             if (isset($wallet[$tx_info['hash160']])) {
-
                 $key_info = $wallet[$tx_info['hash160']];
                 $message_hash_dec = $math->hexDec($message_hash[$vin]);
 
@@ -1198,6 +1275,15 @@ class RawTransaction
      */
     public static function encode_signature(Signature $signature)
     {
+        $math = EccFactory::getAdapter();
+        $generator = EccFactory::getSecgCurves($math)->generator256k1();
+
+        // if S is > half then we substract from N
+        if (self::check_signature_is_high_s($signature)) {
+            $n = $generator->getOrder();
+            $signature = new Signature($signature->getR(), $math->sub($n, $signature->getS()));
+        }
+
         $rBin = pack("H*", BitcoinLib::hex_encode($signature->getR()));
         $sBin = pack("H*", BitcoinLib::hex_encode($signature->getS()));
 
@@ -1283,7 +1369,7 @@ class RawTransaction
      */
     public static function decode_signature($signature)
     {
-        $math = \Mdanter\Ecc\EccFactory::getAdapter();
+        $math = EccFactory::getAdapter();
 
         $r_start = 8;
         $r_length = $math->hexDec(substr($signature, 6, 2)) * 2;
@@ -1466,7 +1552,6 @@ class RawTransaction
 
         if (count($redeem_scripts) > 0) {
             foreach ($redeem_scripts as $script) {
-
                 $decode = self::decode_redeem_script($script);
                 if ($decode == false) {
                     continue;

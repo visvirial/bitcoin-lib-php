@@ -3,14 +3,11 @@
 namespace BitWasp\BitcoinLib;
 
 use Mdanter\Ecc\EccFactory;
-use Mdanter\Ecc\GeneratorPoint;
-use Mdanter\Ecc\NumberTheory;
-use Mdanter\Ecc\Point;
-use Mdanter\Ecc\PointInterface;
-use Mdanter\Ecc\PrivateKey;
-use Mdanter\Ecc\PublicKey;
-use Mdanter\Ecc\Signature\Signature;
-use Mdanter\Ecc\Signature\Signer;
+use Mdanter\Ecc\Primitives\GeneratorPoint;
+use Mdanter\Ecc\Primitives\PointInterface;
+use Mdanter\Ecc\Crypto\Signature\Signature;
+use Mdanter\Ecc\Crypto\Signature\Signer;
+use Mdanter\Ecc\Crypto\Key\PublicKey;
 
 /**
  * BitcoinLib
@@ -850,7 +847,6 @@ class BitcoinLib
 
         for ($i = 0; $i < 4; $i++) {
             if ($pubKey = self::recoverPubKey($r, $s, $e, $i, $generator)) {
-
                 if ($pubKey->getPoint()->getX() == $Q->getX() && $pubKey->getPoint()->getY() == $Q->getY()) {
                     return $i;
                 }
@@ -954,11 +950,12 @@ class BitcoinLib
 
     /**
      * verify a signed message
-     * 
+     *
      * @param $address
      * @param $signature
      * @param $message
      * @return bool
+     * @throws \Exception
      */
     public static function verifyMessage($address, $signature, $message)
     {
@@ -1029,7 +1026,7 @@ class BitcoinLib
 
     /**
      * helper function to ensure a hex has all it's preceding 0's (which PHP tends to trim off)
-     * 
+     *
      * @param      $hex
      * @param null $length
      * @return string
